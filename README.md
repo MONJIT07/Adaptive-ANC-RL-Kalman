@@ -1,609 +1,888 @@
-# Memory-Aware Nonlinear Active Noise Cancellation
+# Adaptive ANC with RL-Tuned Kalman Secondary-Path Tracking for ECG Artifact Reduction
 
-> **Final Year Project — Ongoing**
+> **Final Year Project — Active Noise Control Framework**
 >
-> A research-oriented simulation study of **Active Noise Cancellation (ANC)** under practical challenges such as **time-varying secondary paths, nonlinear system behavior, and actuator saturation**.
+> A research-oriented implementation and comparative evaluation of adaptive **Active Noise Cancellation (ANC)** pipelines for ECG artifact reduction, focusing on **reinforcement-learning-assisted secondary-path identification**, **online Kalman tracking**, and robustness to **time-varying measurement paths**.
+
+[![Python](https://img.shields.io/badge/Python-3.x-blue?logo=python)](https://www.python.org/)
+[![Signal Processing](https://img.shields.io/badge/Domain-Digital%20Signal%20Processing-orange)](#)
+[![ANC](https://img.shields.io/badge/ANC-FxLMS-green)](#)
+[![Research](https://img.shields.io/badge/Project-Research-purple)](#)
 
 ---
 
 ## 📌 Overview
 
-Active Noise Cancellation (ANC) is a technique used to reduce unwanted noise by generating an anti-noise signal that destructively interferes with the original disturbance.
+**Active Noise Control (ANC)** reduces an unwanted disturbance by generating an anti-signal that passes through a **secondary path** before cancelling the disturbance at an error sensor.
 
-In practical ANC systems, however, the acoustic environment is not always constant. The **secondary path** between the controller output and the error microphone can change over time due to changes in the acoustic environment, actuator characteristics, microphone position, or other system conditions.
+A critical challenge in practical ANC systems is that the secondary path is not necessarily stationary. Changes in sensor placement, coupling, electrode contact, actuator characteristics, or the surrounding environment can cause the secondary path to change over time.
 
-This project investigates a **memory-aware nonlinear ANC system** with an adaptive secondary-path estimation mechanism.
+This project investigates whether an ANC system can remain stable and effective when this secondary path changes during operation.
 
-The current implementation focuses on two major areas:
+Two adaptive ANC pipelines are implemented and compared:
 
-1. **RL-tuned Kalman secondary-path tracking** for time-varying ANC.
-2. **Saturating-actuator characterization** to study the effect of real-world actuator limitations on ANC performance and stability.
+### Pipeline A — RL-Identified FxLMS
 
-The project is currently **under development**, and further experimentation and improvements are planned.
+A reinforcement-learning-tuned **leaky NLMS** identifier estimates the secondary path offline. The resulting secondary-path estimate is then fixed and used by a conventional **Filtered-x LMS (FxLMS)** controller.
 
----
+### Pipeline B — RL-Tuned Kalman Secondary-Path Tracking
 
-## 🎯 Project Objectives
+A **Kalman filter** continuously estimates the secondary path online. A reinforcement-learning-style innovation supervisor detects significant changes and triggers a covariance reset, allowing the estimator to rapidly re-lock to the new path.
 
-The main objectives of the project are:
+The two approaches are evaluated under identical controlled measurement-path changes using biomedical ECG datasets.
 
-* Develop a simulation environment for Active Noise Cancellation.
-* Model realistic machinery/engine-like noise.
-* Incorporate a nonlinear disturbance model with memory.
-* Estimate the ANC secondary path using a Kalman filter.
-* Track changes in the secondary path over time.
-* Develop an innovation-triggered adaptive scheduling mechanism.
-* Compare low and high Kalman process-noise configurations.
-* Investigate the effect of actuator saturation on ANC performance.
-* Compare different FxLMS strategies under actuator saturation.
-* Analyze ANC performance, convergence, and stability.
+The central research question is:
+
+> **Can online Kalman secondary-path tracking provide greater robustness to changing measurement paths than a highly accurate but fixed RL-identified secondary-path model?**
 
 ---
 
-## 🧠 System Concept
+## 🎯 Objectives
 
-The overall ANC system can be represented as:
+The main objectives of this project are:
+
+* Develop an adaptive ANC framework for ECG artifact reduction.
+* Implement a conventional FxLMS controller.
+* Develop an RL-tuned offline secondary-path identification method.
+* Develop an online Kalman secondary-path tracking method.
+* Detect secondary-path changes using Kalman innovation.
+* Introduce covariance-reset based re-locking after path changes.
+* Compare stationary and time-varying secondary-path scenarios.
+* Evaluate robustness using real ECG datasets.
+* Measure output SNR, waveform correlation, recovery, PRD, and R-peak F1.
+* Analyze computational cost and practical deployment trade-offs.
+* Identify failure modes and limitations of both approaches.
+
+---
+
+## 🧠 System Architecture
+
+The overall comparison can be represented as:
 
 ```text
-                    Primary Noise
+                    ECG + Artifact
                          |
                          v
-                     Primary Path
-                        P(z)
+                  Disturbed Signal
                          |
                          v
-                   Disturbance d(n)
+              +----------------------+
+              |      ANC System      |
+              +----------------------+
                          |
+              +----------+----------+
+              |                     |
+              v                     v
+       Pipeline A              Pipeline B
+       RL-FxLMS                RL-Kalman
+              |                     |
+              v                     v
+      Offline Secondary       Online Secondary
+      Path Identification     Path Tracking
+              |                     |
+              v                     v
+        Fixed S_hat(z)       Kalman S_hat(z)
+              |                     |
+              v                     v
+            FxLMS                 FxLMS
+              |                     |
+              +----------+----------+
                          |
-Reference x(n) ----------+------------------+
-                         |                  |
-                         v                  |
-                    Control Filter         |
-                       W(z)                |
-                         |                  |
-                         v                  |
-                  Actuator / Speaker       |
-                         |                  |
-                    Saturation             |
-                         |                  |
-                         v                  |
-                  Secondary Path           |
-                       S(z)                |
-                         |                  |
-                         v                  |
-                   Anti-noise y(n)         |
-                         |                  |
-                         +------(-)---------+
-                                |
-                                v
-                           Error e(n)
-                                |
-                                v
-                             FxLMS
-                                |
-                                v
-                        Update W(z)
+                         v
+                   Recovered ECG
+                         |
+                         v
+                 Performance Metrics
 ```
 
-At the same time, the secondary path is estimated using an auxiliary probe:
-
-```text
-             Auxiliary Probe
-                    |
-                    v
-             Secondary Path S(z)
-                    |
-                    v
-              System Response
-                    |
-                    v
-              Kalman Filter
-                    |
-                    v
-             Estimated S_hat(z)
-                    |
-                    v
-             FxLMS Controller
-```
+Both pipelines operate through the **same time-varying true secondary path**. The primary difference is how the secondary-path estimate is obtained.
 
 ---
 
-## 🔬 Part A — RL-Tuned Kalman Secondary-Path Tracker
+## 🔬 Pipeline A — RL-Identified FxLMS
 
-The first part of the project addresses the problem of a **time-varying secondary path**.
+Pipeline A represents the conventional **offline secondary-path identification** approach.
 
-The secondary path is represented as an FIR model whose coefficients are treated as the state of a Kalman filter.
+During an offline phase:
 
-An auxiliary probe signal is injected into the system to provide information about the secondary path.
+1. The secondary path is excited using white noise.
+2. A leaky NLMS estimator identifies the secondary path.
+3. A tabular Q-learning agent tunes the identifier parameters.
+4. The resulting secondary-path estimate is fixed.
+5. The fixed estimate is used by the FxLMS controller.
 
-### Why Kalman Filtering?
+The Q-learning agent tunes parameters such as:
 
-The Kalman filter provides a way to estimate the unknown secondary-path coefficients while accounting for uncertainty and measurement noise.
+* Step size
+* Filter order
+* Leakage
 
-The project investigates the effect of the Kalman **process noise covariance Q**.
+The RL identifier is trained for **60 episodes** with the objective of minimizing identification NMSE.
 
-Two static configurations are compared:
-
-| Configuration              | Behavior                                                               |
-| -------------------------- | ---------------------------------------------------------------------- |
-| Low Q                      | Better steady-state model quality but slower adaptation                |
-| High Q                     | Faster adaptation but potentially noisier steady state                 |
-| Innovation-triggered reset | Conservative during steady state and aggressive after detected changes |
-
-The implementation uses:
+### Pipeline A
 
 ```text
-Low process noise:
-Q = 1e-9
-
-High process noise:
-Q = 1e-5
+White-Noise Excitation
+          |
+          v
+   Secondary Path
+          |
+          v
+    Leaky NLMS
+          |
+          v
+    Q-Learning
+   Hyperparameter
+     Selection
+          |
+          v
+   Fixed S_hat(z)
+          |
+          v
+        FxLMS
 ```
 
-The secondary-path estimate contains **48 taps** in the current configuration.
+### Strength
+
+Pipeline A provides an extremely accurate secondary-path model when the path is stationary.
+
+### Limitation
+
+Once the actual secondary path changes, the offline estimate becomes stale.
+
+A sufficiently large phase mismatch can rotate the FxLMS gradient in the wrong direction and cause divergence.
 
 ---
 
-## 🔄 Innovation-Triggered Scheduler
+## 🧮 Pipeline B — RL-Tuned Kalman Secondary-Path Tracker
 
-Instead of continuously operating with a high process-noise value, the proposed approach normally operates conservatively and monitors the Kalman innovation.
+Pipeline B is the proposed adaptive tracking approach.
 
-The basic idea is:
+The secondary-path coefficients are represented as a state in a Kalman filter.
+
+A low-level auxiliary probe continuously provides information about the current secondary path.
+
+The Kalman filter therefore updates the secondary-path estimate online.
 
 ```text
-Normal operation
-      |
-      v
-Monitor innovation
-      |
-      v
-Innovation increases significantly?
-      |
-     YES
-      |
-      v
-Covariance reset
-      +
-Higher probe level
-      +
-Temporary controller mute
-      |
-      v
-Secondary-path re-lock
-      |
-      v
-Return to normal ANC operation
+              Auxiliary Probe
+                    |
+                    v
+              True S(z)
+                    |
+                    v
+            Measurement
+                    |
+                    v
+             Kalman Filter
+                    |
+                    v
+             S_hat(z)
+                    |
+                    v
+                  FxLMS
 ```
 
-The current implementation uses an innovation-ratio threshold to trigger the covariance reset.
+The system continuously monitors the **Kalman innovation**.
 
-This mechanism is referred to within the project as the **RL scheduler**. The current implementation is an innovation-driven adaptive scheduler rather than a conventional deep-RL agent such as DQN or PPO.
+When the innovation remains significantly elevated, it indicates that the current secondary-path estimate may no longer represent the actual path.
+
+The system then:
+
+1. Detects the change.
+2. Inflates/reset the covariance.
+3. Temporarily mutes the controller.
+4. Allows the Kalman filter to re-lock.
+5. Returns to normal ANC operation.
 
 ---
 
-## 📈 Time-Varying Secondary Path
+## 🔄 Innovation-Triggered Adaptation
 
-To evaluate tracking performance, the simulation introduces a significant secondary-path change during operation.
+The key idea behind Pipeline B is to avoid operating the Kalman filter permanently at a high process-noise level.
 
-The current Part A experiment uses a path change at:
+Instead:
 
 ```text
-t = 3 seconds
+              Normal Operation
+                     |
+                     v
+             Monitor Innovation
+                     |
+                     v
+          Innovation remains high?
+                /           \
+              No             Yes
+              |               |
+              v               v
+        Continue ANC     Trigger Reset
+                              |
+                    +---------+---------+
+                    |                   |
+                    v                   v
+              Inflate P            Increase
+                                  Adaptation
+                    |                   |
+                    +---------+---------+
+                              |
+                              v
+                        Re-lock S_hat
+                              |
+                              v
+                         Resume ANC
 ```
 
-The purpose is to evaluate whether the estimated secondary path can:
+Two refinements are incorporated into Pipeline B:
 
-* remain accurate during steady state,
-* detect a sudden path change,
-* recover after the change,
-* and maintain ANC performance.
+### Probe-Echo Cancellation
+
+The estimated echo of the identification probe is removed from the control error.
+
+### Persistence-Gated Trigger
+
+The innovation must remain elevated over a dwell window before a reset is triggered.
+
+This reduces false detections caused by transient ECG events or artifact spikes.
 
 ---
 
-## 🎛️ FxLMS Controller
+## ⚙️ Why Secondary-Path Tracking Matters
 
-The ANC controller is based on the **Filtered-x Least Mean Squares (FxLMS)** algorithm.
-
-A conventional LMS controller uses the reference signal directly for adaptation.
-
-In ANC, the reference signal must account for the secondary path:
+In FxLMS, the reference signal is filtered using the estimated secondary path:
 
 ```text
-Reference x(n)
-      |
-      v
-Estimated Secondary Path S_hat(z)
-      |
-      v
-Filtered Reference x'(n)
-      |
-      v
-FxLMS Adaptation
+x(n)
+ |
+ v
+S_hat(z)
+ |
+ v
+x'(n)
+ |
+ v
+FxLMS
+ |
+ v
+Controller W(z)
 ```
 
-The filtered reference is then used to update the adaptive control filter.
+If the secondary-path estimate is accurate, the adaptation gradient points toward reduced error.
 
-The current implementation uses a **64-tap control filter**.
-
----
-
-# 🔊 Part B — Saturating-Actuator Characterization
-
-The second part of the project investigates the effect of **actuator saturation** on ANC.
-
-In a practical system, a loudspeaker or actuator cannot generate unlimited output.
+If the estimate becomes sufficiently incorrect, the gradient can become destabilizing.
 
 Therefore:
 
-```text
-Requested control output
-          |
-          v
-     Actuator limit
-          |
-          v
- Actual control output
-```
+> **A stale secondary-path estimate is not simply inaccurate — it can destabilize the ANC loop.**
 
-The project evaluates both:
+This is the central motivation for continuously tracking the secondary path.
 
-* **Hard saturation**
-* **Soft saturation**
+---
 
-### Hard Saturation
+## 🧪 Experimental Methodology
 
-The control output is clipped to a specified range.
+The comparison is designed so that both pipelines experience the same experimental conditions.
 
-Conceptually:
+Shared conditions include:
 
-```text
-if y > limit:
-    y = limit
+* Same ECG record
+* Same sampling rate
+* Same controller length
+* Same initial controller
+* Same secondary-path model
+* Same path-change instants
+* Same random seed
+* Same true time-varying secondary path
 
-if y < -limit:
-    y = -limit
-```
-
-### Soft Saturation
-
-A `tanh()`-based nonlinear saturation model is used:
+The only major difference is:
 
 ```text
-y_out = limit × tanh(y / limit)
+Pipeline A
+Offline + Fixed S_hat(z)
+
+          VS.
+
+Pipeline B
+Online + Continuously Tracked S_hat(z)
 ```
 
-This provides a smoother transition toward the actuator limit.
+Three controlled measurement-path changes are introduced during the experiments.
 
 ---
 
-## 🧪 Experiments
+## ❤️ Dataset 1 — MIT-BIH Record 118
 
-### 1. Saturation Severity Sweep
+The first experiment uses:
 
-Different actuator limits are tested to understand how increasing saturation affects noise-reduction performance.
+* **MIT-BIH record 118**
+* Lead: MLII
+* Sampling rate: 360 Hz
+* Electrode-motion (EM) artifact
+* Muscle-artifact (MA) noise
 
-Current test points include:
+The artifact is scaled to produce a target **0 dB input SNR**.
+
+Two scenarios are evaluated:
 
 ```text
-200%
-100%
-60%
-40%
-25%
-15%
+1. Static secondary path
+2. Three controlled path changes
 ```
 
-of the measured linear peak control output.
-
-Metrics include:
-
-* Noise Reduction (NR)
-* Percentage of clipped samples
+The static experiment evaluates pure identification/control quality, while the changing-path experiment evaluates robustness.
 
 ---
 
-### 2. FxLMS Method Comparison
+## 📊 MIT-BIH Results
 
-The project compares four approaches:
+On a static path, both pipelines operate close to the theoretical performance ceiling.
+
+| Scenario       | Pipeline A |   Pipeline B | Winner |
+| -------------- | ---------: | -----------: | ------ |
+| Static — EM    |    7.94 dB |      7.58 dB | A      |
+| Static — MA    |    6.64 dB |      6.01 dB | A      |
+| 3 Changes — EM |  -22.60 dB | **-1.19 dB** | **B**  |
+| 3 Changes — MA |   -0.26 dB | **+0.97 dB** | **B**  |
+
+The most significant result is the **EM three-change experiment**, where Pipeline B provides approximately a **21 dB advantage** over Pipeline A.
+
+### Interpretation
 
 ```text
-1. Naive FxLMS
-2. Leaky FxLMS
-3. Saturation-aware FxLMS
-4. Output-constrained FxLMS
-```
+Static Path
+     |
+     +--> Pipeline A ≈ Pipeline B
+             |
+             v
+       Both near ceiling
 
-These approaches are evaluated under different actuator saturation levels.
+
+Changing Path
+     |
+     +--> Pipeline A
+     |       |
+     |       v
+     |   Model becomes stale
+     |       |
+     |       v
+     |    Divergence
+     |
+     +--> Pipeline B
+             |
+             v
+       Detects change
+             |
+             v
+       Kalman re-lock
+             |
+             v
+       Bounded operation
+```
 
 ---
 
-### 3. Stability Analysis
+## 🧬 Dataset 2 — PhysioNet ECG-ID
 
-The project also performs a raw step-size sweep to study the stability of the adaptive controller.
+The second experiment uses **five distinct ECG-ID recordings**.
 
-Current step sizes include:
+For each recording:
+
+* Sampling rate: **500 Hz**
+* Length: **20 seconds**
+* 10,000 × 2 samples
+* Raw/noisy ECG used as the contaminated signal
+* Database-filtered ECG used as the clean reference
+
+The provided recordings span an input SNR range from:
 
 ```text
-1e-3
-2e-3
-3e-3
-4e-3
-5e-3
-7e-3
++6.85 dB
+       ↓
+−11.63 dB
 ```
 
-The behavior of the system is compared with:
+Three recordings have negative input SNR, meaning the noise is stronger than the ECG signal.
+
+---
+
+## 📈 ECG-ID Results
+
+Pipeline B wins the output-SNR comparison on **all five recordings**.
+
+| Record | Input SNR | Pipeline A SNR | Pipeline B SNR | Winner |
+| ------ | --------: | -------------: | -------------: | ------ |
+| P1     |  +6.85 dB |       -1.84 dB |   **+1.13 dB** | B      |
+| P2     |  -4.65 dB |      -44.90 dB |   **-5.26 dB** | B      |
+| P3     |  -4.75 dB |      -34.05 dB |   **-7.49 dB** | B      |
+| P4     |  +0.50 dB |       -6.49 dB |   **-5.05 dB** | B      |
+| P5     | -11.63 dB |      -61.40 dB |   **-4.42 dB** | B      |
+
+Pipeline A experiences catastrophic divergence on the noisier recordings, while Pipeline B remains bounded.
+
+---
+
+## 📊 Aggregate ECG-ID Performance
+
+Mean ± standard deviation across the five ECG-ID recordings:
+
+| Metric      | Pipeline A — RL-FxLMS | Pipeline B — RL-Kalman |
+| ----------- | --------------------: | ---------------------: |
+| Output SNR  |       -29.7 ± 22.7 dB |      **-4.2 ± 2.9 dB** |
+| Correlation |           0.21 ± 0.24 |        **0.51 ± 0.12** |
+| PRD         |     28,099 ± 45,177 % |         **171 ± 48 %** |
+| Records Won |                 0 / 5 |              **5 / 5** |
+
+The key advantage of Pipeline B is not perfect denoising. Its main advantage is **stability and graceful degradation under changing-path conditions**.
+
+---
+
+## 🔍 Record-Level Observations
+
+### P1 — Cleanest Record
+
+Input SNR: **+6.85 dB**
+
+Pipeline B achieves:
 
 ```text
-Linear actuator
-vs.
-Hard-clipped actuator
+Output SNR = +1.13 dB
+Correlation = 0.74
 ```
 
-The objective is to understand how actuator saturation affects the stability and behavior of the adaptive control loop.
+This is the only ECG-ID record where clear positive absolute output SNR is achieved.
 
----
+### P2 and P3
 
-# 📊 Evaluation Metrics
-
-The project currently uses several metrics.
-
-### Noise Reduction (NR)
-
-Noise reduction is calculated from the ratio between disturbance power and residual noise power.
-
-Higher NR indicates better noise cancellation.
-
----
-
-### ERLE
-
-**Echo Return Loss Enhancement (ERLE)** is used as a time-varying measure of cancellation performance.
-
-It is calculated from the ratio between disturbance power and residual power over a moving window.
-
----
-
-### Secondary-Path NMSE
-
-The estimated secondary path is compared against the true simulated secondary path using **Normalized Mean Square Error (NMSE)**.
+With input SNR around **-4.7 dB**, Pipeline A diverges to approximately:
 
 ```text
-NMSE =
-||S_hat - S||²
-----------------
-   ||S||²
+-34 dB to -45 dB
 ```
 
-The value is represented in dB in the generated results.
-
-Lower NMSE indicates a more accurate secondary-path estimate.
-
----
-
-### Correlation
-
-Correlation between the estimated and true secondary-path impulse responses is also calculated.
-
-A value closer to `1` indicates stronger similarity between the two responses.
-
----
-
-### Reconvergence Time
-
-After a secondary-path change, the project measures how long the system takes to return close to its post-change performance level.
-
----
-
-# 🧰 Technologies Used
-
-The current simulation is implemented in **Python**.
-
-### Programming Language
-
-* Python 3
-
-### Libraries
-
-* NumPy
-* SciPy
-* Pandas
-* Matplotlib
-
-The project is implemented as a self-contained Python simulation and generates figures, CSV files, and JSON result files.
-
----
-
-# 📁 Project Structure
-
-A recommended repository structure is:
+Pipeline B remains bounded around:
 
 ```text
-Memory-Aware-Nonlinear-ANC/
-│
-├── rl_kalman_and_saturation.py
-│
-├── README.md
-│
-├── rl_kalman_saturation/
-│   │
-│   ├── figures/
-│   │   ├── A1_shat_nmse.png
-│   │   ├── A2_erle.png
-│   │   ├── A3_tradeoff.png
-│   │   ├── B1_severity.png
-│   │   ├── B2_methods.png
-│   │   └── B3_stability.png
-│   │
-│   └── results/
-│       ├── partA_kalman_metrics.csv
-│       ├── partA_kalman_summary.json
-│       ├── partB_severity_sweep.csv
-│       └── partB_saturation.json
-│
-└── LICENSE
+-5 dB to -7 dB
 ```
 
-The exact generated directory contents may evolve as the project develops.
+and retains positive waveform correlation.
 
----
+### P5 — Hardest Case
 
-# ⚙️ Installation
-
-Clone the repository:
-
-```bash
-git clone <your-repository-url>
-cd Memory-Aware-Nonlinear-ANC
-```
-
-Install the required Python packages:
-
-```bash
-pip install numpy scipy pandas matplotlib
-```
-
----
-
-# ▶️ Running the Project
-
-Run the main simulation using:
-
-```bash
-python rl_kalman_and_saturation.py
-```
-
-The program performs:
+Input SNR:
 
 ```text
-Part A
-  ↓
-Time-varying ANC simulation
-  ↓
-Low-Q Kalman
-High-Q Kalman
-RL covariance-reset scheduler
-  ↓
-Metrics + plots
-
-Part B
-  ↓
-Actuator saturation study
-  ↓
-Severity sweep
-Method comparison
-Stability analysis
-  ↓
-Metrics + plots
+-11.63 dB
 ```
 
-The generated figures and results are stored in:
+Pipeline A:
 
 ```text
-rl_kalman_saturation/
+Output SNR = -61.40 dB
+Correlation = -0.01
 ```
+
+Pipeline B:
+
+```text
+Output SNR = -4.42 dB
+Correlation = 0.47
+```
+
+Pipeline B does not produce positive SNR, but it remains bounded instead of catastrophically diverging.
 
 ---
 
-# 📌 Current Status
+## 🛠️ Pipeline Improvements
 
-**Project Status: 🚧 Ongoing**
+Several improvements were evaluated during the study.
 
-### Completed / Implemented
+### Controller Length
 
-* [x] ANC simulation environment
-* [x] Primary and secondary path modeling
-* [x] Machinery/engine-like reference noise generation
-* [x] Nonlinear disturbance model with memory
+Increasing the biomedical controller from:
+
+```text
+32 taps → 64 taps
+```
+
+improved ECG-ID rec_1 performance.
+
+| Metric      |  32 taps |      64 taps |
+| ----------- | -------: | -----------: |
+| Output SNR  | +0.69 dB | **+1.13 dB** |
+| Recovery    |    14.7% |    **23.0%** |
+| Correlation |    0.729 |    **0.743** |
+| PRD         |      92% |      **88%** |
+
+The same controller length was applied to both pipelines to maintain a fair comparison.
+
+---
+
+## ❌ What Did Not Work
+
+The study also documents approaches that produced poor results.
+
+### Freezing the Controller During Re-Lock
+
+Freezing the control filter instead of muting it resulted in divergence.
+
+**Conclusion:** temporary controller muting is necessary during re-lock.
+
+### Larger FxLMS Step Size
+
+Increasing the step size to approximately:
+
+```text
+μ = 0.02 – 0.03
+```
+
+worsened performance on broadband noise because of increased misadjustment.
+
+### Post-Change Step-Size Boost
+
+A temporary increase in step size after a path change did not provide measurable improvement.
+
+### Shorter Mute Window
+
+Reducing the mute duration prevented the secondary-path estimator from fully re-locking.
+
+These negative results help define the engineering constraints of the proposed approach.
+
+---
+
+## 💻 Computational Cost
+
+The two approaches distribute computational cost differently.
+
+| Metric                    | Pipeline A | Pipeline B |
+| ------------------------- | ---------: | ---------: |
+| Offline RL identification |    ~3.05 s |       None |
+| Online cost/sample        | **7.9 μs** |    26.9 μs |
+| Total time to result      |     3.11 s | **0.19 s** |
+| Complexity                |       O(L) |  O(L + L²) |
+
+Pipeline B costs approximately **3.4× more per sample** because of the Kalman covariance update.
+
+However, at the tested biomedical sampling rate, the measured 26.9 μs/sample remains comfortably below the 500 Hz sample period.
+
+---
+
+## 📏 Evaluation Metrics
+
+The project evaluates the pipelines using multiple complementary metrics.
+
+### Output SNR
+
+Measures the quality of the recovered signal relative to the residual artifact.
+
+**Higher is better.**
+
+### Waveform Correlation
+
+Measures similarity between the recovered ECG and clean reference.
+
+**Higher is better.**
+
+### Recovery Percentage
+
+Defined using the recovered-vs-clean error energy.
+
+**Higher is better.**
+
+### PRD
+
+**Percentage Root-Mean-Square Difference**
+
+**Lower is better.**
+
+### R-Peak F1
+
+Measures preservation of ECG beat annotations and R-peak detection performance.
+
+### Stability
+
+The project also examines whether the adaptive controller remains bounded following secondary-path changes.
+
+The use of multiple metrics is important because a single SNR value does not fully describe ECG morphology preservation.
+
+---
+
+## 🏆 Main Findings
+
+The experiments lead to several important conclusions.
+
+### Static Secondary Path
+
+Pipeline A is highly competitive and reaches the theoretical ceiling because its offline secondary-path estimate is extremely accurate.
+
+### Changing Secondary Path
+
+Pipeline B is significantly more robust because it continuously tracks the secondary path.
+
+### Noisy ECG
+
+Pipeline A can experience catastrophic divergence when the path changes and the fixed secondary-path estimate becomes incorrect.
+
+Pipeline B remains bounded and preserves substantially better waveform correlation.
+
+### Overall
+
+```text
+Pipeline A
+    ↓
+Highly accurate when static
+    ↓
+Fragile under path changes
+
+
+Pipeline B
+    ↓
+Slightly higher computational cost
+    ↓
+Online path tracking
+    ↓
+Change detection
+    ↓
+Covariance reset
+    ↓
+Re-lock
+    ↓
+Graceful degradation
+```
+
+The report concludes that Pipeline B is the more robust approach under non-stationary conditions.
+
+---
+
+## 🔬 Research Contribution
+
+The project explores the combination of:
+
+```text
+Active Noise Control
+        +
+Filtered-x LMS
+        +
+Reinforcement Learning
+        +
+Kalman Filtering
+        +
+Online Secondary-Path Tracking
+        +
+Innovation-Based Change Detection
+        +
+Adaptive Control
+        +
+Biomedical Signal Validation
+```
+
+The primary contribution is the investigation of an **online RL-tuned Kalman secondary-path tracker** that can detect and adapt to controlled measurement-path changes while preventing the catastrophic divergence observed with a fixed secondary-path model.
+
+---
+
+## 🚧 Limitations
+
+The current study has several important limitations.
+
+### Not a Clinical Device
+
+The ECG experiments are controlled signal-processing validations.
+
+The secondary path, probe, and path changes are modelling constructs.
+
+No clinical or diagnostic claims are made.
+
+### Not Perfect Denoising
+
+Pipeline B improves robustness but does not transform extremely noisy ECG recordings into clean signals.
+
+On four of the five ECG-ID recordings, the absolute output SNR remains negative.
+
+### Reference Limitation
+
+The ECG-ID reference uses:
+
+```text
+Noise = Raw ECG − Database-filtered ECG
+```
+
+This is possible because the dataset provides a raw/filtered pair.
+
+A practical system would generally have an imperfect reference sensor.
+
+### Limited Dataset
+
+The study currently uses:
+
+* One MIT-BIH record
+* Five ECG-ID recordings
+
+A larger cohort and paired statistical testing are identified as future work.
+
+---
+
+## 🚀 Future Work
+
+The report identifies several directions for further development.
+
+### 1. Noise-Robust Change Detection
+
+The most important remaining limitation is reliable change detection under very noisy ECG conditions.
+
+A proposed next step is a:
+
+> **Noise-robust, QRS-gated change detector**
+
+This would reduce false or missed triggers caused by noisy Kalman innovation.
+
+### 2. Hybrid Architecture
+
+A promising architecture is:
+
+```text
+RL-Identified FxLMS
+        |
+        v
+Excellent Initial S_hat
+        |
+        v
+Kalman Tracker
+        |
+        v
+Online Adaptation
+```
+
+This would use Pipeline A's high-quality offline estimate as the initial state for Pipeline B.
+
+The goal is to combine:
+
+* High initial accuracy
+* Online adaptation
+* Robustness to path changes
+* Stable operation
+
+The hybrid architecture is a natural next design direction.
+
+### 3. Larger Dataset
+
+Future experiments should include:
+
+* More ECG records
+* Larger cohorts
+* Statistical significance testing
+* Additional artifact types
+* More path-change scenarios
+
+### 4. Real-Time / Hardware Validation
+
+The algorithms can eventually be evaluated on physical audio/sensor hardware to determine how simulation results translate into real-world ANC systems.
+
+---
+
+## 📌 Project Status
+
+**Status: 🚧 Final Year Project / Research in Progress**
+
+### Implemented
+
 * [x] FxLMS controller
-* [x] Kalman-based secondary-path tracking
-* [x] Time-varying secondary-path simulation
-* [x] Innovation-based change detection
-* [x] Covariance-reset scheduling
-* [x] Actuator saturation modeling
-* [x] Saturation severity experiments
-* [x] FxLMS method comparison
-* [x] Stability experiments
-* [x] Automated metric and figure generation
+* [x] RL-tuned secondary-path identification
+* [x] Kalman secondary-path tracking
+* [x] Innovation-triggered covariance reset
+* [x] Probe-echo cancellation
+* [x] Persistence-gated change detection
+* [x] MIT-BIH validation
+* [x] PhysioNet ECG-ID validation
+* [x] Controlled secondary-path changes
+* [x] Output SNR analysis
+* [x] Correlation analysis
+* [x] Recovery and PRD analysis
+* [x] R-peak evaluation framework
+* [x] Computational-cost comparison
+* [x] Failure-mode analysis
 
-### 🔨 Work in Progress
+### 🔨 Future Development
 
-* [x] Further validation with additional operating conditions
-* [ ] More extensive parameter tuning
-* [ ] Evaluation with additional nonlinearities
-* [ ] Improved adaptive scheduling strategies
-* [ ] Further stability analysis
-* [ ] Real-world / hardware validation
-* [ ] Final experimental evaluation
+* [ ] Noise-robust QRS-gated change detection
+* [ ] Hybrid RL-FxLMS + Kalman architecture
+* [ ] Larger ECG dataset evaluation
+* [ ] Statistical significance testing
+* [ ] Additional artifact types
+* [ ] Additional path-change conditions
+* [ ] Real-time implementation
+* [ ] Hardware validation
 * [ ] Final project documentation
 
 ---
 
-# 🚀 Future Work
+## 🏁 Conclusion
 
-The project is currently being extended toward a more robust and practical ANC framework.
+The experimental results show that the **RL-tuned Kalman secondary-path tracker** provides substantially better robustness than a fixed RL-identified FxLMS pipeline when the secondary measurement path changes.
 
-Potential future work includes:
+On stationary paths, the offline RL-identified pipeline reaches the theoretical performance ceiling.
 
-* Testing additional time-varying secondary-path scenarios.
-* Improving the adaptive scheduling mechanism.
-* Investigating alternative reinforcement-learning-based scheduling strategies.
-* Evaluating additional nonlinear actuator models.
-* Testing different ANC adaptation algorithms.
-* Studying robustness under different noise and SNR conditions.
-* Performing real-time implementation.
-* Integrating the algorithm with physical audio hardware.
-* Comparing simulation results with experimental measurements.
+Under changing paths, however, the fixed secondary-path estimate can become destabilizing, resulting in catastrophic divergence.
 
----
-
-# 📚 Research Focus
-
-The project combines concepts from several areas:
+The Kalman-based pipeline addresses this through:
 
 ```text
-Digital Signal Processing
-          +
-Adaptive Filtering
-          +
-Active Noise Cancellation
-          +
-Kalman Filtering
-          +
-Nonlinear Systems
-          +
-Adaptive Control
-          +
-Reinforcement-Learning-inspired Scheduling
-          +
-Actuator Saturation
+Online secondary-path estimation
+            +
+Innovation monitoring
+            +
+Persistence-gated detection
+            +
+Covariance reset
+            +
+Temporary controller muting
+            =
+Robust adaptation to path changes
 ```
 
-The primary research focus is on improving ANC robustness when the secondary acoustic path is **time-varying and nonlinear**, while also understanding the limitations introduced by actuator saturation.
+The main contribution is therefore **not universal ECG denoising**, but improved **stability, robustness, and graceful degradation under non-stationary measurement paths**.
 
----
-
-# 👥 Project
-
-**Final Year Project**
-
-**Project Title:**
-**Memory-Aware Nonlinear Active Noise Cancellation**
-
-**Status:** Ongoing
-
-> This repository contains the current research and simulation implementation. Results, algorithms, and system architecture may be updated as the project progresses.
+The clearest next step is to improve the change detector using a **noise-robust, QRS-gated strategy**, followed by evaluation of the proposed hybrid offline-RL + online-Kalman architecture.
 
 ---
 
 ## ⚠️ Disclaimer
 
-This project is intended for **academic and research purposes**. The current implementation is primarily a simulation-based study and should not be considered a production-ready ANC controller or a validated real-world acoustic system.
+This repository is intended for **academic and research purposes**.
+
+The biomedical experiments are controlled signal-processing validations and **do not constitute a clinical device, diagnostic system, or medical recommendation**.
+
+The secondary path, auxiliary probe, and measurement-path changes used in the experiments are modelling constructs. Results should not be interpreted as evidence of clinical efficacy.
+
+---
+
+## 👥 Project
+
+**Final Year Project**
+
+**Research Area:** Active Noise Control / Adaptive Signal Processing / Biomedical Signal Processing
+
+**Primary Focus:**
+
+> **RL-Tuned Kalman Secondary-Path Tracking for Robust Adaptive ANC**
+
+**Application:** ECG artifact reduction
+
+**Project Status:** Ongoing
 
 ---
 
 ## 📄 License
 
-This project is currently intended for academic use.
+This project is currently intended for academic and research use.
 
-A formal open-source license can be added when the project is finalized.
+A formal open-source license will be added when the project is finalized.
+
+---
+
+## 📖 References & Reproducibility
+
+The experiments documented in this repository correspond to the accompanying technical report:
+
+> **FxLMS+RL vs Kalman+RL — MIT-BIH & ECG-ID Comparison**
+> *Comparative Evaluation of Two Adaptive ANC Pipelines*
+
+The report documents the datasets, methodology, controlled path perturbations, evaluation metrics, experimental results, computational cost, limitations, and future work.
